@@ -1,70 +1,7 @@
-# import requests
-# from bs4 import BeautifulSoup
-
-# # Укажите ваш API-ключ и CX
-# API_KEY = "AIzaSyCrpSmuHPU8uJT1e4A1PX_ODg_gGWquN_8"
-# CX = "32b05b95271394d27"
-
-# params = {
-#     "key": API_KEY,
-#     "cx": CX,
-#     "q": "холодильник купить москва",
-#     "hl": "ru",
-#     "gl": "ru",
-#     "num": 5  # Получаем 5 результатов
-# }
-
-# def get_search_results():
-#     """Получение результатов поиска Google Custom Search API"""
-#     url = "https://www.googleapis.com/customsearch/v1"
-#     response = requests.get(url, params=params)
-#     if response.status_code == 200:
-#         try:
-#             data = response.json()
-#             return data.get("items", [])
-#         except ValueError:
-#             print("Ошибка преобразования JSON")
-#             return []
-#     else:
-#         print(f"Ошибка запроса: {response.status_code}")
-#         return []
-
-# def extract_price_from_page(url):
-#     """Парсинг страницы для извлечения цены"""
-#     headers = {
-#         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-#     }
-#     try:
-#         response = requests.get(url, headers=headers, timeout=10)
-#         response.raise_for_status()
-#         soup = BeautifulSoup(response.text, 'html.parser')
-
-#         # Ищем div с классами ChPIuf YrbPuc
-#         price_div = soup.find('div', class_='ChPIuf YrbPuc')
-#         if price_div:
-#             return price_div.get_text(strip=True)
-#         else:
-#             return "Цена не найдена"
-#     except requests.RequestException as e:
-#         print(f"Ошибка при запросе {url}: {e}")
-#         return "Ошибка при получении страницы"
-
-# def main():
-#     search_results = get_search_results()
-#     for item in search_results:
-#         title = item.get('title', 'Нет заголовка')
-#         link = item.get('link', 'Нет ссылки')
-#         print(f"Заголовок: {title}\nСсылка: {link}")
-#         if link != 'Нет ссылки':
-#             price = extract_price_from_page(link)
-#             print(f"Цена: {price}\n")
-
-# if __name__ == "__main__":
-#     main()
-
 import requests
 from bs4 import BeautifulSoup
 from serpapi import GoogleSearch
+import gspread
 
 # API-ключ SerpApi
 API_KEY = "f73ed154c1d13673b73da5b3b60a16ca3982c8885b15c60afc80b2475219e7c9"
@@ -131,10 +68,70 @@ def extract_keywords_from_page(url):
     except requests.RequestException as e:
         return f"Ошибка при получении страницы: {e}"
 
+def write_to_google_sheets(data):
+    """Добавляет данные в Google Таблицы."""
+    # Авторизация с использованием JSON-ключа
+    gc = gspread.service_account(filename="credentials.json")
+    
+    # Открываем таблицу
+    spreadsheet = gc.open("SheetName")
+    
+    # Основной лист с результатами
+    try:
+        main_worksheet = spreadsheet.worksheet("Results")
+    except gspread.exceptions.WorksheetNotFound:
+        main_worksheet = spreadsheet.add_worksheet(title="Results", rows="100", cols="20")
+    
+    # Заголовки для основного листа
+    headers = ["ID", "Заголовок", "Ссылка", "Описание", "Цена"]
+    main_worksheet.clear()
+    main_worksheet.append_row(headers)
+    
+    # Создаём лист для ключевых слов
+    try:
+        keywords_worksheet = spreadsheet.worksheet("Keywords")
+    except gspread.exceptions.WorksheetNotFound:
+        keywords_worksheet = spreadsheet.add_worksheet(title="Keywords", rows="100", cols="10")
+    
+    # Заголовки для листа с ключевыми словами
+    keyword_headers = ["ID", "Ключевое слово"]
+    keywords_worksheet.clear()
+    keywords_worksheet.append_row(keyword_headers)
+    
+    # Счётчик ID для каждой записи
+    record_id = 1
+    keyword_rows = []  # Для массовой записи ключевых слов
+    result_rows = []   # Для массовой записи в основной лист
+
+    # Запись данных
+    for result in data:
+        title, link, snippet, keywords_snippet, price, keywords_meta = result
+
+        # Добавляем данные для основного листа
+        result_rows.append([record_id, title, link, snippet, price])
+        
+        # Обработка ключевых слов
+        unique_keywords = set(keywords_snippet.split(", ") + keywords_meta.split(", "))
+        for keyword in unique_keywords:
+            keyword_rows.append([record_id, keyword.strip()])
+
+        record_id += 1
+
+    # Массовая запись в основной лист
+    if result_rows:
+        main_worksheet.update(f"A2:E{len(result_rows) + 1}", result_rows)
+
+    # Массовая запись в лист ключевых слов
+    if keyword_rows:
+        keywords_worksheet.update(f"A2:B{len(keyword_rows) + 1}", keyword_rows)
+
+
+
 def main():
     """Основная функция."""
     print("Получение результатов из SerpApi...")
     search_results = get_search_results()
+    rows = []
 
     for result in search_results:
         title = result.get("title", "Нет названия")
@@ -150,15 +147,25 @@ def main():
         print(f"Ключевые слова (title + snippet): {', '.join(keywords_from_snippet)}")
         
         # Парсинг страницы для получения цены
-        if link != "Нет ссылки":
-            print("Парсинг страницы для получения цены...")
-            price = extract_price_from_page(link)
-            print(f"Цена: {price}")
-            
-            # Извлечение ключевых слов из мета-тегов страницы
-            print("Извлечение ключевых слов из мета-тегов...")
-            keywords_from_meta = extract_keywords_from_page(link)
-            print(f"Ключевые слова (meta): {keywords_from_meta}")
+        price = extract_price_from_page(link) if link != "Нет ссылки" else "Нет ссылки"
+        print(f"Цена: {price}")
+        
+        # Извлечение ключевых слов из мета-тегов страницы
+        keywords_from_meta = extract_keywords_from_page(link) if link != "Нет ссылки" else "Нет ссылки"
+        print(f"Ключевые слова (meta): {keywords_from_meta}")
+        
+        # Добавляем данные в строки
+        rows.append([
+            title,
+            link,
+            snippet,
+            ", ".join(keywords_from_snippet),
+            price,
+            keywords_from_meta,
+        ])
+    
+    # Запись данных в Google Таблицы
+    write_to_google_sheets(rows)
 
 if __name__ == "__main__":
     main()
